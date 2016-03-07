@@ -104,7 +104,6 @@ func grimmReaper() {
         for {
           // Reap processes
           _, err := syscall.Wait4(-1, nil, 0, nil)
-          
           // Break out if there are no more processes to read
           if err == syscall.ECHILD {
             break
@@ -127,6 +126,7 @@ func main() {
   time.Sleep(time.Second)
   evts := watch.ResultChan()
   for {
+    glog.Info("EventLoopStart");
     evt := <-evts
     if evt.Type == "ADDED" || evt.Type == "MODIFIED" || evt.Type == "DELETED" {
       fmt.Printf("Restart Caddy due to evt : %v", evt)
@@ -136,5 +136,6 @@ func main() {
       fmt.Printf("Something went wrong - evt: %v", evt)
       time.Sleep(time.Second)
     }
+    glog.Info("EventLoopEnd");
   }
 }
