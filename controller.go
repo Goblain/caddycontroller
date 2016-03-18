@@ -13,6 +13,7 @@ import (
   "os/signal"
   "text/template"
   "k8s.io/kubernetes/pkg/api"
+  "k8s.io/kubernetes/pkg/controller/framework"
   client "k8s.io/kubernetes/pkg/client/unversioned"
 )
 
@@ -29,6 +30,8 @@ http://{{$vhost}}:80 {
 {{end}}
 }
 {{end}}
+
+log stdout
 `
 )
 
@@ -114,6 +117,29 @@ func grimmReaper() {
   }
 }
 
+func getIngressNotificationChannel() {
+  // Create channel to send notifications about changed ingress objects
+  notifications := make(chan interface{})
+
+  // define handlers for Add/Delete/Update to notify with changed object
+  handlers := framework.ResourceEventHandlerFuncs {
+    AddFunc: func(obj interface{}) { notifications <- obj },
+    DeleteFunc: func(obj interface{}) { notifications <- obj },
+    UpdateFunc: func(old, cur interface{}) { if !reflect.DeepEqual(old, cur) { notifications <- cur } }
+  }
+
+  // Create informer that will watch for ingress changes and trigger handlers
+  ingressLister.Store, ingressController = framework.NewInformer(
+    &cache.ListWatch{
+      ListFunc:  c.Extensions().Ingress(api.NamespaceAll).List(api.ListOptions{}),
+      WatchFunc: c.Extensions().Ingress(api.NamespaceAll).Watch(api.ListOptions{}),
+    },
+    &extensions.Ingress{}, time.Minute, handlers)
+
+  go ingressController.Run()
+
+  return notifications
+}
 
 func main() {
   grimmReaper()
@@ -124,18 +150,12 @@ func main() {
   if err != nil { panic(err) }
   go launchCaddy()
   time.Sleep(time.Second)
-  evts := watch.ResultChan()
+  evts := getIngressNotificationChannel()
   for {
-    glog.Info("EventLoopStart");
+    glog.Info("EventLoop");
     evt := <-evts
-    if evt.Type == "ADDED" || evt.Type == "MODIFIED" || evt.Type == "DELETED" {
-      fmt.Printf("Restart Caddy due to evt : %v", evt)
-      regenerateCaddyfile(getRouter(kubeClient))
-      reloadCaddy()
-    } else {
-      fmt.Printf("Something went wrong - evt: %v", evt)
-      time.Sleep(time.Second)
-    }
-    glog.Info("EventLoopEnd");
+    fmt.Printf("Restart Caddy due to evt : %v", evt)
+    regenerateCaddyfile(getRouter(kubeClient))
+    reloadCaddy()
   }
 }
