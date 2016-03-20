@@ -152,7 +152,7 @@ func main() {
   kubeClient, err := client.NewInCluster()
   if err != nil { panic(err) }
   regenerateCaddyfile(getRouter(kubeClient))
-  go launchCaddy()
+  launchCaddy()
   time.Sleep(time.Second)
   evts := getIngressNotificationChannel(kubeClient)
   for {
