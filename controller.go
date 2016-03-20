@@ -1,6 +1,7 @@
 package main
 
 import (
+  "reflect"
   "syscall"
   "time"
   "fmt"
@@ -14,6 +15,11 @@ import (
   "text/template"
   "k8s.io/kubernetes/pkg/api"
   "k8s.io/kubernetes/pkg/controller/framework"
+  "k8s.io/kubernetes/pkg/apis/extensions"
+  "k8s.io/kubernetes/pkg/client/cache"
+  "k8s.io/kubernetes/pkg/runtime"
+  "k8s.io/kubernetes/pkg/watch"
+
   client "k8s.io/kubernetes/pkg/client/unversioned"
 )
 
@@ -117,26 +123,26 @@ func grimmReaper() {
   }
 }
 
-func getIngressNotificationChannel() {
+func getIngressNotificationChannel(c *client.Client) (chan interface{}) {
   // Create channel to send notifications about changed ingress objects
   notifications := make(chan interface{})
 
   // define handlers for Add/Delete/Update to notify with changed object
-  handlers := framework.ResourceEventHandlerFuncs {
+  handlers := framework.ResourceEventHandlerFuncs{
     AddFunc: func(obj interface{}) { notifications <- obj },
     DeleteFunc: func(obj interface{}) { notifications <- obj },
-    UpdateFunc: func(old, cur interface{}) { if !reflect.DeepEqual(old, cur) { notifications <- cur } }
-  }
+    UpdateFunc: func(old, cur interface{}) { if !reflect.DeepEqual(old, cur) { notifications <- cur } } }
 
+  var ingressController *framework.Controller
   // Create informer that will watch for ingress changes and trigger handlers
-  ingressLister.Store, ingressController = framework.NewInformer(
+  _, ingressController = framework.NewInformer(
     &cache.ListWatch{
-      ListFunc:  c.Extensions().Ingress(api.NamespaceAll).List(api.ListOptions{}),
-      WatchFunc: c.Extensions().Ingress(api.NamespaceAll).Watch(api.ListOptions{}),
-    },
+      ListFunc:  func(api.ListOptions) (runtime.Object, error) { return c.Extensions().Ingress(api.NamespaceAll).List(api.ListOptions{}) },
+      WatchFunc: func(api.ListOptions) (watch.Interface, error) { return c.Extensions().Ingress(api.NamespaceAll).Watch(api.ListOptions{}) } },
     &extensions.Ingress{}, time.Minute, handlers)
 
-  go ingressController.Run()
+  stopChannel := make(chan struct {})
+  go ingressController.Run(stopChannel)
 
   return notifications
 }
@@ -146,13 +152,11 @@ func main() {
   kubeClient, err := client.NewInCluster()
   if err != nil { panic(err) }
   regenerateCaddyfile(getRouter(kubeClient))
-  watch, err := kubeClient.Extensions().Ingress(api.NamespaceAll).Watch(api.ListOptions{})
-  if err != nil { panic(err) }
   go launchCaddy()
   time.Sleep(time.Second)
-  evts := getIngressNotificationChannel()
+  evts := getIngressNotificationChannel(kubeClient)
   for {
-    glog.Info("EventLoop");
+    glog.Info("EventLoop")
     evt := <-evts
     fmt.Printf("Restart Caddy due to evt : %v", evt)
     regenerateCaddyfile(getRouter(kubeClient))
