@@ -97,7 +97,7 @@ func reloadCaddy() {
   if pid > 0 { 
     syscall.Kill(pid, 10) 
   } else {
-    launchCaddy()
+    go launchCaddy()
   }  
 }
 
@@ -157,7 +157,7 @@ func main() {
   kubeClient, err := client.NewInCluster()
   if err != nil { panic(err) }
   regenerateCaddyfile(getRouter(kubeClient))
-  launchCaddy()
+  go launchCaddy()
   time.Sleep(time.Second)
   glog.Info("Get notification channel from watchers")
   evts := getIngressNotificationChannel(kubeClient)
