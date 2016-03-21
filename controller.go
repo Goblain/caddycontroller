@@ -27,6 +27,7 @@ import (
 const (
   DefaultConfigFile = "/Caddyfile"
   templatesrc = `
+tls off
 {{range $vhost,$paths := . }}
 http://{{$vhost}}:80 {
 {{range $path,$service := $paths }}
