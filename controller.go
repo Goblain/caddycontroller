@@ -85,7 +85,7 @@ func launchCaddy() {
 
 func getCaddyPid() int {
   filebytes, err := ioutil.ReadFile("/caddy.pid")
-  if err != nil { panic(err) }
+  if err != nil { return -1 }
   pid := bytes.NewBuffer(filebytes).String()
   intpid, err := strconv.Atoi(pid)
   return intpid
@@ -93,7 +93,12 @@ func getCaddyPid() int {
 
 func reloadCaddy() {
   fmt.Printf("Reload caddy pid: %v", getCaddyPid())
-  syscall.Kill(getCaddyPid(), 10) 
+  pid := getCaddyPid()
+  if pid > 0 { 
+    syscall.Kill(pid, 10) 
+  } else {
+    launchCaddy()
+  }  
 }
 
 
