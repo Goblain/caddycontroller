@@ -27,9 +27,10 @@ import (
 const (
   DefaultConfigFile = "/Caddyfile"
   templatesrc = `
-tls off
 {{range $vhost,$paths := . }}
 http://{{$vhost}}:80 {
+  tls off
+  log stdout
 {{range $path,$service := $paths }}
   proxy {{$path}} {{$service}} {
     proxy_header X-Real-IP {remote}
@@ -37,8 +38,6 @@ http://{{$vhost}}:80 {
 {{end}}
 }
 {{end}}
-
-log stdout
 `
 )
 
