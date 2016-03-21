@@ -76,7 +76,7 @@ func launchCaddy() {
   cmd := exec.Command("/caddy", "--pidfile", "/caddy.pid", "--conf", "/Caddyfile")
   if err := cmd.Run(); err != nil {
     if err.Error() == "exit status 1" && cmd.Process.Pid != getCaddyPid() {
-      fmt.Printf("Parent process exited with child alive")
+      glog.Info("Parent process exited with child alive")
     } else {
       panic(err)
     }
@@ -84,6 +84,7 @@ func launchCaddy() {
 }
 
 func getCaddyPid() int {
+  glog.Info("Getting current Caddy pid from /caddy.pid")
   filebytes, err := ioutil.ReadFile("/caddy.pid")
   if err != nil { return -1 }
   pid := bytes.NewBuffer(filebytes).String()
@@ -92,9 +93,9 @@ func getCaddyPid() int {
 }
 
 func reloadCaddy() {
-  fmt.Printf("Reload caddy pid: %v", getCaddyPid())
   pid := getCaddyPid()
-  if pid > 0 { 
+  glog.Infof("Reload caddy pid: %v", pid)
+  if pid != -1 { 
     syscall.Kill(pid, 10) 
   } else {
     go launchCaddy()
@@ -108,6 +109,7 @@ func reloadCaddy() {
 func grimmReaper() {
 // that has pid 1.
   if os.Getpid() == 1 {
+    glog.Info("Starting grimmReaper to reap zombies if launched as pid 1")
     go func() {
       sigs := make(chan os.Signal, 1)
       signal.Notify(sigs, syscall.SIGCHLD)
@@ -134,9 +136,9 @@ func getIngressNotificationChannel(c *client.Client) (chan interface{}) {
 
   // define handlers for Add/Delete/Update to notify with changed object
   handlers := framework.ResourceEventHandlerFuncs{
-    AddFunc: func(obj interface{}) { glog.Info("Handler AddFunc"); notifications <- obj },
-    DeleteFunc: func(obj interface{}) { glog.Info("Handler DeleteFunc");  notifications <- obj },
-    UpdateFunc: func(old, cur interface{}) { glog.Info("Handler UpdateFunc"); if !reflect.DeepEqual(old, cur) { notifications <- cur } } }
+    AddFunc: func(obj interface{}) { glog.Info("Handler AddFunc triggered"); notifications <- obj },
+    DeleteFunc: func(obj interface{}) { glog.Info("Handler DeleteFunc triggered");  notifications <- obj },
+    UpdateFunc: func(old, cur interface{}) { glog.Info("Handler UpdateFunc triggered"); if !reflect.DeepEqual(old, cur) { notifications <- cur } } }
 
   var ingressController *framework.Controller
   // Create informer that will watch for ingress changes and trigger handlers
