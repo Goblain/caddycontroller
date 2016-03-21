@@ -134,9 +134,9 @@ func getIngressNotificationChannel(c *client.Client) (chan interface{}) {
 
   // define handlers for Add/Delete/Update to notify with changed object
   handlers := framework.ResourceEventHandlerFuncs{
-    AddFunc: func(obj interface{}) { notifications <- obj },
-    DeleteFunc: func(obj interface{}) { notifications <- obj },
-    UpdateFunc: func(old, cur interface{}) { if !reflect.DeepEqual(old, cur) { notifications <- cur } } }
+    AddFunc: func(obj interface{}) { glog.Info("Handler AddFunc"); notifications <- obj },
+    DeleteFunc: func(obj interface{}) { glog.Info("Handler DeleteFunc");  notifications <- obj },
+    UpdateFunc: func(old, cur interface{}) { glog.Info("Handler UpdateFunc"); if !reflect.DeepEqual(old, cur) { notifications <- cur } } }
 
   var ingressController *framework.Controller
   // Create informer that will watch for ingress changes and trigger handlers
