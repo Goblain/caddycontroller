@@ -159,11 +159,12 @@ func main() {
   regenerateCaddyfile(getRouter(kubeClient))
   launchCaddy()
   time.Sleep(time.Second)
+  glog.Info("Get notification channel from watchers")
   evts := getIngressNotificationChannel(kubeClient)
   for {
     glog.Info("EventLoop")
     evt := <-evts
-    fmt.Printf("Restart Caddy due to evt : %v", evt)
+    glog.Infof("Restart Caddy due to evt : %v", evt)
     regenerateCaddyfile(getRouter(kubeClient))
     reloadCaddy()
   }
