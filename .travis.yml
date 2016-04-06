@@ -1,0 +1,22 @@
+language: go
+
+go:
+- 1.6
+
+sudo: required
+
+env:
+- CGO_ENABLED=0
+
+services:
+- docker
+
+before_install:
+- wget https://github.com/mholt/caddy/releases/download/v0.8.2/caddy_linux_amd64.tar.gz
+- tar xzf caddy_linux_amd64.tar.gz
+
+script:
+- go build -v
+- docker build -t goblain/caddycontroller:latest .
+- docker login -e="$DOCKER_EMAIL" -u="$DOCKER_USERNAME" -p="$DOCKER_PASSWORD"
+- docker push goblain/caddycontroller:latest

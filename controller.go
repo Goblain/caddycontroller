@@ -1,19 +1,26 @@
 package main
 
 import (
+  "reflect"
+  "syscall"
+  "time"
   "fmt"
+  "github.com/golang/glog"
+  "io/ioutil"
   "strconv"
   "bytes"
   "os"
+  "os/exec"
+  "os/signal"
   "text/template"
   "k8s.io/kubernetes/pkg/api"
-  client "k8s.io/kubernetes/pkg/client/unversioned"
-  "github.com/mholt/caddy/caddy"
-)
+  "k8s.io/kubernetes/pkg/controller/framework"
+  "k8s.io/kubernetes/pkg/apis/extensions"
+  "k8s.io/kubernetes/pkg/client/cache"
+  "k8s.io/kubernetes/pkg/runtime"
+  "k8s.io/kubernetes/pkg/watch"
 
-var (
-  AppName string = "CaddyIngress"
-  AppVersion string = "v0.1"
+  client "k8s.io/kubernetes/pkg/client/unversioned"
 )
 
 // Keep a Caddyfile template in a constant
@@ -21,7 +28,9 @@ const (
   DefaultConfigFile = "/Caddyfile"
   templatesrc = `
 {{range $vhost,$paths := . }}
-http://{{$vhost}} {
+http://{{$vhost}}:80 {
+  tls off
+  log stdout
 {{range $path,$service := $paths }}
   proxy {{$path}} {{$service}} {
     proxy_header X-Real-IP {remote}
@@ -53,34 +62,112 @@ func getRouter (kubeClient *client.Client) Router {
   return router
 }
 
-func regenerateCaddyfile(router Router) []byte {
+func regenerateCaddyfile(router Router) {
   tpl, err := template.New("test").Parse(templatesrc)
   if err != nil { panic(err) }
   var buffer bytes.Buffer
-  err = tpl.Execute(&buffer, router)                                                                                                                                                                                                                            
+  err = tpl.Execute(&buffer, router)
   if err != nil { panic(err) }
-  return buffer.Bytes()
+  fmt.Printf("Generated Caddyfile content :\n %v \n\n", buffer.String())
+  ioutil.WriteFile("/Caddyfile", buffer.Bytes(), 644)
+}
+
+func launchCaddy() {
+  cmd := exec.Command("/caddy", "--pidfile", "/caddy.pid", "--conf", "/Caddyfile")
+  if err := cmd.Run(); err != nil {
+    if err.Error() == "exit status 1" && cmd.Process.Pid != getCaddyPid() {
+      glog.Info("Parent process exited with child alive")
+    } else {
+      panic(err)
+    }
+  }
+}
+
+func getCaddyPid() int {
+  glog.Info("Getting current Caddy pid from /caddy.pid")
+  filebytes, err := ioutil.ReadFile("/caddy.pid")
+  if err != nil { return -1 }
+  pid := bytes.NewBuffer(filebytes).String()
+  intpid, err := strconv.Atoi(pid)
+  return intpid
+}
+
+func reloadCaddy() {
+  pid := getCaddyPid()
+  glog.Infof("Reload caddy pid: %v", pid)
+  if pid != -1 { 
+    syscall.Kill(pid, 10) 
+  } else {
+    go launchCaddy()
+  }  
+}
+
+
+// CaddyController is intended to launch as root process of a contaier in K8S POD, 
+// aS such, it faces PID1 zombie reaping responsibility so reaping function is created below
+// (code borrowed from OpenShift)
+func grimmReaper() {
+// that has pid 1.
+  if os.Getpid() == 1 {
+    glog.Info("Starting grimmReaper to reap zombies if launched as pid 1")
+    go func() {
+      sigs := make(chan os.Signal, 1)
+      signal.Notify(sigs, syscall.SIGCHLD)
+      for {
+        // Wait for a child to terminate
+        sig := <-sigs
+        glog.Infof("Signal recieved : %v", sig)
+        for {
+          // Reap processes
+          _, err := syscall.Wait4(-1, nil, 0, nil)
+          // Break out if there are no more processes to read
+          if err == syscall.ECHILD {
+            break
+          }
+        }
+      }
+    }()
+  }
+}
+
+func getIngressNotificationChannel(c *client.Client) (chan interface{}) {
+  // Create channel to send notifications about changed ingress objects
+  notifications := make(chan interface{})
+
+  // define handlers for Add/Delete/Update to notify with changed object
+  handlers := framework.ResourceEventHandlerFuncs{
+    AddFunc: func(obj interface{}) { glog.Info("Handler AddFunc triggered"); notifications <- obj },
+    DeleteFunc: func(obj interface{}) { glog.Info("Handler DeleteFunc triggered");  notifications <- obj },
+    UpdateFunc: func(old, cur interface{}) { glog.Info("Handler UpdateFunc triggered"); if !reflect.DeepEqual(old, cur) { notifications <- cur } } }
+
+  var ingressController *framework.Controller
+  // Create informer that will watch for ingress changes and trigger handlers
+  _, ingressController = framework.NewInformer(
+    &cache.ListWatch{
+      ListFunc:  func(api.ListOptions) (runtime.Object, error) { return c.Extensions().Ingress(api.NamespaceAll).List(api.ListOptions{}) },
+      WatchFunc: func(api.ListOptions) (watch.Interface, error) { return c.Extensions().Ingress(api.NamespaceAll).Watch(api.ListOptions{}) } },
+    &extensions.Ingress{}, time.Minute, handlers)
+
+  stopChannel := make(chan struct {})
+  go ingressController.Run(stopChannel)
+
+  return notifications
 }
 
 func main() {
+  grimmReaper()
   kubeClient, err := client.NewInCluster()
   if err != nil { panic(err) }
-  router := getRouter(kubeClient)
-  watch, err := kubeClient.Extensions().Ingress(api.NamespaceAll).Watch(api.ListOptions{})
-  if err != nil { panic(err) }  
-  evts := watch.ResultChan()
+  regenerateCaddyfile(getRouter(kubeClient))
+  go launchCaddy()
+  time.Sleep(time.Second)
+  glog.Info("Get notification channel from watchers")
+  evts := getIngressNotificationChannel(kubeClient)
   for {
+    glog.Info("EventLoop")
     evt := <-evts
-    if caddy.IsRestart() {
-      fmt.Printf("Skip Caddy restart on evt : %v", evt)
-      os.Setenv("CADDY_RESTART", "false")
-    } else {
-      fmt.Printf("Restart Caddy due to evt : %v", evt)
-      err := caddy.Restart(caddy.CaddyfileInput{Contents: []byte(regenerateCaddyfile(router))})
-      if err != nil { panic(err) }
-//      caddy.Wait()
-      os.Exit(0)
-    }
+    glog.Infof("Restart Caddy due to evt : %v", evt)
+    regenerateCaddyfile(getRouter(kubeClient))
+    reloadCaddy()
   }
-
 }
